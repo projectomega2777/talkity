@@ -1,2 +1,2 @@
 # talkity
-A clone website for whispr flow , with no limits  free to use
+A clone website of whispr flow , with no limits  free to use
