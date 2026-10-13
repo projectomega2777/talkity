@@ -395,15 +395,26 @@
     capsuleTimer.textContent = `${mins}:${secs}`;
   }
 
+  function escapeHTML(str) {
+    if (typeof str !== 'string') return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   function renderRawTranscript(text) {
     if (!text) {
       rawTextDisplay.innerHTML = '<span class="placeholder-text">Speak naturally into your microphone...</span>';
       return;
     }
 
-    // Highlight filler words in real-time
+    // 🛡️ Sanitize user speech before applying visual styling
+    const safeText = escapeHTML(text);
     const fillerRegex = /\b(um|uh|erm|er|ah|you know|basically|actually|so yeah)\b/gi;
-    const highlighted = text.replace(fillerRegex, '<span class="filler-removed">$1</span>');
+    const highlighted = safeText.replace(fillerRegex, '<span class="filler-removed">$1</span>');
     rawTextDisplay.innerHTML = highlighted;
 
     const words = text.split(/\s+/).filter(Boolean).length;
@@ -550,22 +561,33 @@
     dictTableBody.innerHTML = '';
     state.dictionary.forEach((item, index) => {
       const row = document.createElement('tr');
-      row.innerHTML = `
-        <td><code>${item.phrase}</code></td>
-        <td><strong>${item.replacement}</strong></td>
-        <td>
-          <button class="btn-del" data-index="${index}" title="Delete rule">&times;</button>
-        </td>
-      `;
-      dictTableBody.appendChild(row);
-    });
 
-    dictTableBody.querySelectorAll('.btn-del').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const idx = e.target.getAttribute('data-index');
-        await fetch(`/api/dictionary/${idx}`, { method: 'DELETE' });
+      const tdPhrase = document.createElement('td');
+      const code = document.createElement('code');
+      code.textContent = item.phrase || '';
+      tdPhrase.appendChild(code);
+
+      const tdRep = document.createElement('td');
+      const strong = document.createElement('strong');
+      strong.textContent = item.replacement || '';
+      tdRep.appendChild(strong);
+
+      const tdAction = document.createElement('td');
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-del';
+      delBtn.setAttribute('data-index', String(index));
+      delBtn.title = 'Delete rule';
+      delBtn.textContent = '×';
+      delBtn.addEventListener('click', async () => {
+        await fetch(`/api/dictionary/${index}`, { method: 'DELETE' });
         fetchDictionary();
       });
+      tdAction.appendChild(delBtn);
+
+      row.appendChild(tdPhrase);
+      row.appendChild(tdRep);
+      row.appendChild(tdAction);
+      dictTableBody.appendChild(row);
     });
   }
 
@@ -643,43 +665,91 @@
   function renderHistoryTable(items) {
     historyTableBody.innerHTML = '';
     if (!items || items.length === 0) {
-      historyTableBody.innerHTML = '<tr><td colspan="7" class="text-dim" style="text-align:center;">No past dictations found.</td></tr>';
+      const emptyRow = document.createElement('tr');
+      const emptyTd = document.createElement('td');
+      emptyTd.colSpan = 7;
+      emptyTd.className = 'text-dim';
+      emptyTd.style.textAlign = 'center';
+      emptyTd.textContent = 'No past dictations found.';
+      emptyRow.appendChild(emptyTd);
+      historyTableBody.appendChild(emptyRow);
       return;
     }
 
     items.forEach(item => {
       const row = document.createElement('tr');
       const dateStr = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      row.innerHTML = `
-        <td><small class="text-dim">${dateStr}</small></td>
-        <td><span class="badge badge-subtle">${item.app || 'Web'}</span></td>
-        <td>${item.numWords || 0}</td>
-        <td>${item.duration || 0}s</td>
-        <td><span class="badge badge-engine">${item.tone || 'clean'}</span></td>
-        <td style="max-width:320px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${item.formattedText}">
-          ${item.formattedText}
-        </td>
-        <td>
-          <button class="btn btn-xs btn-outline copy-history-btn" data-text="${encodeURIComponent(item.formattedText)}">Copy</button>
-        </td>
-      `;
-      historyTableBody.appendChild(row);
-    });
 
-    historyTableBody.querySelectorAll('.copy-history-btn').forEach(b => {
-      b.addEventListener('click', (e) => {
-        const text = decodeURIComponent(e.target.getAttribute('data-text'));
-        copyToClipboard(text);
+      // Time
+      const tdTime = document.createElement('td');
+      const smallTime = document.createElement('small');
+      smallTime.className = 'text-dim';
+      smallTime.textContent = dateStr;
+      tdTime.appendChild(smallTime);
+
+      // App
+      const tdApp = document.createElement('td');
+      const badgeApp = document.createElement('span');
+      badgeApp.className = 'badge badge-subtle';
+      badgeApp.textContent = item.app || 'Web';
+      tdApp.appendChild(badgeApp);
+
+      // Words
+      const tdWords = document.createElement('td');
+      tdWords.textContent = String(item.numWords || 0);
+
+      // Duration
+      const tdDuration = document.createElement('td');
+      tdDuration.textContent = `${item.duration || 0}s`;
+
+      // Tone
+      const tdTone = document.createElement('td');
+      const badgeTone = document.createElement('span');
+      badgeTone.className = 'badge badge-engine';
+      badgeTone.textContent = item.tone || 'clean';
+      tdTone.appendChild(badgeTone);
+
+      // Polished Text (Safe from XSS via textContent)
+      const tdText = document.createElement('td');
+      tdText.style.maxWidth = '320px';
+      tdText.style.textOverflow = 'ellipsis';
+      tdText.style.overflow = 'hidden';
+      tdText.style.whiteSpace = 'nowrap';
+      tdText.title = item.formattedText || '';
+      tdText.textContent = item.formattedText || '';
+
+      // Copy Action
+      const tdAction = document.createElement('td');
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn-xs btn-outline';
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', () => {
+        copyToClipboard(item.formattedText || '');
       });
+      tdAction.appendChild(copyBtn);
+
+      row.appendChild(tdTime);
+      row.appendChild(tdApp);
+      row.appendChild(tdWords);
+      row.appendChild(tdDuration);
+      row.appendChild(tdTone);
+      row.appendChild(tdText);
+      row.appendChild(tdAction);
+      historyTableBody.appendChild(row);
     });
   }
 
-  // Toast Notification
+  // Toast Notification (🛡️ XSS Safe)
   function showToast(msg) {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = 'toast';
-    toast.innerHTML = `<span>✨</span><span>${msg}</span>`;
+    const icon = document.createElement('span');
+    icon.textContent = '✨ ';
+    const textNode = document.createElement('span');
+    textNode.textContent = msg;
+    toast.appendChild(icon);
+    toast.appendChild(textNode);
     container.appendChild(toast);
 
     setTimeout(() => {
