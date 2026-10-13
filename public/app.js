@@ -1,0 +1,714 @@
+// Talkity Client-Side Application Logic
+
+(function () {
+  'use strict';
+
+  // State Management
+  const state = {
+    isRecording: false,
+    startTime: 0,
+    timerInterval: null,
+    audioContext: null,
+    analyser: null,
+    mediaStream: null,
+    recognition: null,
+    rawText: '',
+    interimText: '',
+    polishedText: '',
+    currentTone: 'clean',
+    currentApp: 'slack',
+    dictionary: [],
+    settings: {
+      engine: 'webspeech',
+      groqKey: '',
+      openaiKey: '',
+      autoCopy: true,
+      soundChimes: true
+    },
+    ws: null
+  };
+
+  // DOM Elements
+  const recordBtn = document.getElementById('recordBtn');
+  const recordBtnText = document.getElementById('recordBtnText');
+  const hudCapsule = document.getElementById('hudCapsule');
+  const capsuleDot = document.getElementById('capsuleDot');
+  const capsuleLabel = document.getElementById('capsuleLabel');
+  const capsuleTimer = document.getElementById('capsuleTimer');
+  const capsuleWaveform = document.getElementById('capsuleWaveform');
+  const mainVisualizer = document.getElementById('mainVisualizer');
+  const visualizerGlow = document.getElementById('visualizerGlow');
+  const rawTextDisplay = document.getElementById('rawTextDisplay');
+  const polishedTextDisplay = document.getElementById('polishedTextDisplay');
+  const rawMeta = document.getElementById('rawMeta');
+  const polishLatencyBadge = document.getElementById('polishLatencyBadge');
+  const copyBtn = document.getElementById('copyBtn');
+  const injectActiveAppBtn = document.getElementById('injectActiveAppBtn');
+  const tonePills = document.querySelectorAll('.tone-pill');
+  const appTabs = document.querySelectorAll('.app-tab');
+  const insertToSandboxBtn = document.getElementById('insertToSandboxBtn');
+  const dictForm = document.getElementById('dictForm');
+  const dictTableBody = document.getElementById('dictTableBody');
+  const historyTableBody = document.getElementById('historyTableBody');
+  const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsModal = document.getElementById('settingsModal');
+  const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+  const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+  const sttEngineSelect = document.getElementById('sttEngineSelect');
+  const groqApiKey = document.getElementById('groqApiKey');
+  const openaiApiKey = document.getElementById('openaiApiKey');
+  const groqKeyGroup = document.getElementById('groqKeyGroup');
+  const openaiKeyGroup = document.getElementById('openaiKeyGroup');
+  const autoCopyCheck = document.getElementById('autoCopyCheck');
+  const soundChimesCheck = document.getElementById('soundChimesCheck');
+  const daemonStatus = document.getElementById('daemonStatus');
+
+  // Canvas contexts
+  const mainCtx = mainVisualizer.getContext('2d');
+  const capsuleCtx = capsuleWaveform.getContext('2d');
+
+  // Initialize
+  function init() {
+    loadSettings();
+    initWebSocket();
+    initSpeechRecognition();
+    fetchDictionary();
+    fetchHistory();
+    attachEventListeners();
+    setupCanvasAnimation();
+  }
+
+  // Load / Save Settings
+  function loadSettings() {
+    try {
+      const saved = localStorage.getItem('talkity_settings');
+      if (saved) {
+        state.settings = { ...state.settings, ...JSON.parse(saved) };
+      }
+    } catch {}
+
+    sttEngineSelect.value = state.settings.engine;
+    groqApiKey.value = state.settings.groqKey;
+    openaiApiKey.value = state.settings.openaiKey;
+    autoCopyCheck.checked = state.settings.autoCopy;
+    soundChimesCheck.checked = state.settings.soundChimes;
+
+    groqKeyGroup.style.display = state.settings.engine === 'groq' ? 'block' : 'none';
+    openaiKeyGroup.style.display = state.settings.engine === 'openai' ? 'block' : 'none';
+  }
+
+  function saveSettings() {
+    state.settings.engine = sttEngineSelect.value;
+    state.settings.groqKey = groqApiKey.value.trim();
+    state.settings.openaiKey = openaiApiKey.value.trim();
+    state.settings.autoCopy = autoCopyCheck.checked;
+    state.settings.soundChimes = soundChimesCheck.checked;
+
+    localStorage.setItem('talkity_settings', JSON.stringify(state.settings));
+    settingsModal.classList.remove('open');
+    showToast('Settings saved successfully');
+  }
+
+  // Audio Feedback Synthesizer (Chimes)
+  function playChime(type) {
+    if (!state.settings.soundChimes) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      if (type === 'start') {
+        // Gentle rising chime
+        osc.frequency.setValueAtTime(480, now);
+        osc.frequency.exponentialRampToValueAtTime(720, now + 0.12);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.start(now);
+        osc.stop(now + 0.18);
+      } else {
+        // Soft descending chime
+        osc.frequency.setValueAtTime(680, now);
+        osc.frequency.exponentialRampToValueAtTime(420, now + 0.14);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now);
+        osc.stop(now + 0.2);
+      }
+    } catch {}
+  }
+
+  // WebSocket Connection
+  function initWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}`;
+
+    try {
+      state.ws = new WebSocket(wsUrl);
+
+      state.ws.onopen = () => {
+        daemonStatus.querySelector('.status-dot').style.background = '#10b981';
+        daemonStatus.querySelector('.status-label').textContent = 'Desktop Bridge Connected';
+      };
+
+      state.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'remote_dictation_toggle') {
+            toggleRecording();
+          } else if (data.type === 'history_update') {
+            fetchHistory();
+          }
+        } catch {}
+      };
+
+      state.ws.onclose = () => {
+        daemonStatus.querySelector('.status-dot').style.background = '#f59e0b';
+        daemonStatus.querySelector('.status-label').textContent = 'Web Engine Ready';
+        setTimeout(initWebSocket, 4000);
+      };
+    } catch {
+      daemonStatus.querySelector('.status-label').textContent = 'Web Engine Ready';
+    }
+  }
+
+  // Speech Recognition Setup (Web Speech API)
+  function initSpeechRecognition() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      showToast('Web Speech API not supported in this browser. Please use Chrome, Edge, or configure Groq key.');
+      return;
+    }
+
+    state.recognition = new SpeechRec();
+    state.recognition.continuous = true;
+    state.recognition.interimResults = true;
+    state.recognition.lang = 'en-US';
+
+    state.recognition.onstart = () => {
+      state.interimText = '';
+    };
+
+    state.recognition.onresult = (event) => {
+      let interim = '';
+      let final = '';
+
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          final += event.results[i][0].transcript + ' ';
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+
+      if (final) {
+        state.rawText += final;
+      }
+      state.interimText = interim;
+
+      // Update Live Display
+      const fullDisplay = (state.rawText + (interim ? ' ' + interim : '')).trim();
+      renderRawTranscript(fullDisplay);
+    };
+
+    state.recognition.onerror = (event) => {
+      console.warn('Speech recognition error:', event.error);
+    };
+
+    state.recognition.onend = () => {
+      if (state.isRecording) {
+        try { state.recognition.start(); } catch {}
+      }
+    };
+  }
+
+  // Audio Context & Analyser
+  async function startAudioCapture() {
+    try {
+      state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      state.analyser = state.audioContext.createAnalyser();
+      state.analyser.fftSize = 128;
+
+      const source = state.audioContext.createMediaStreamSource(state.mediaStream);
+      source.connect(state.analyser);
+    } catch (err) {
+      console.warn('Microphone stream access error:', err);
+    }
+  }
+
+  function stopAudioCapture() {
+    if (state.mediaStream) {
+      state.mediaStream.getTracks().forEach(track => track.stop());
+      state.mediaStream = null;
+    }
+    if (state.audioContext) {
+      state.audioContext.close();
+      state.audioContext = null;
+    }
+  }
+
+  // Canvas Waveform Animation Loop
+  function setupCanvasAnimation() {
+    const bufferLength = 64;
+    const dataArray = new Uint8Array(bufferLength);
+
+    function draw() {
+      requestAnimationFrame(draw);
+
+      if (state.isRecording && state.analyser) {
+        state.analyser.getByteFrequencyData(dataArray);
+      } else {
+        dataArray.fill(0);
+      }
+
+      // Draw Main Visualizer
+      mainCtx.clearRect(0, 0, mainVisualizer.width, mainVisualizer.height);
+      const barWidth = (mainVisualizer.width / bufferLength) * 1.8;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const val = dataArray[i];
+        const barHeight = state.isRecording ? Math.max(4, (val / 255) * mainVisualizer.height * 0.85) : 4;
+
+        const grad = mainCtx.createLinearGradient(0, mainVisualizer.height, 0, 0);
+        grad.addColorStop(0, '#00f2fe');
+        grad.addColorStop(1, '#7928ca');
+
+        mainCtx.fillStyle = grad;
+        mainCtx.beginPath();
+        mainCtx.roundRect(x, (mainVisualizer.height - barHeight) / 2, barWidth - 2, barHeight, 3);
+        mainCtx.fill();
+
+        x += barWidth;
+      }
+
+      // Draw Mini Capsule Waveform
+      capsuleCtx.clearRect(0, 0, capsuleWaveform.width, capsuleWaveform.height);
+      const capBarWidth = capsuleWaveform.width / 16;
+      let capX = 0;
+      for (let i = 0; i < 16; i++) {
+        const val = state.isRecording ? dataArray[i * 2] : 20;
+        const capBarHeight = Math.max(3, (val / 255) * capsuleWaveform.height * 0.8);
+
+        capsuleCtx.fillStyle = state.isRecording ? '#00f2fe' : '#6e7681';
+        capsuleCtx.beginPath();
+        capsuleCtx.roundRect(capX, (capsuleWaveform.height - capBarHeight) / 2, capBarWidth - 2, capBarHeight, 2);
+        capsuleCtx.fill();
+        capX += capBarWidth;
+      }
+    }
+
+    draw();
+  }
+
+  // Record Toggle
+  async function toggleRecording() {
+    if (!state.isRecording) {
+      await startRecording();
+    } else {
+      await stopRecording();
+    }
+  }
+
+  async function startRecording() {
+    state.isRecording = true;
+    state.rawText = '';
+    state.interimText = '';
+    state.startTime = Date.now();
+
+    playChime('start');
+    recordBtn.classList.add('recording');
+    recordBtnText.textContent = 'Finish Dictating';
+    hudCapsule.classList.add('recording');
+    capsuleLabel.textContent = 'Listening...';
+    visualizerGlow.classList.add('active');
+
+    rawTextDisplay.innerHTML = '<span class="placeholder-text">Listening... Speak now</span>';
+    polishedTextDisplay.innerHTML = '<span class="placeholder-text">Polishing will stream on finish...</span>';
+    polishLatencyBadge.textContent = 'Processing...';
+
+    // Start timer
+    state.timerInterval = setInterval(updateTimer, 500);
+
+    // Start microphone & recognition
+    await startAudioCapture();
+    if (state.recognition) {
+      try { state.recognition.start(); } catch {}
+    }
+
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify({ type: 'dictation_started' }));
+    }
+  }
+
+  async function stopRecording() {
+    const elapsedSec = ((Date.now() - state.startTime) / 1000).toFixed(1);
+    state.isRecording = false;
+
+    playChime('stop');
+    clearInterval(state.timerInterval);
+    recordBtn.classList.remove('recording');
+    recordBtnText.textContent = 'Start Dictating';
+    hudCapsule.classList.remove('recording');
+    capsuleLabel.textContent = 'Polishing speech...';
+    visualizerGlow.classList.remove('active');
+
+    if (state.recognition) {
+      try { state.recognition.stop(); } catch {}
+    }
+    stopAudioCapture();
+
+    const finalText = (state.rawText + (state.interimText ? ' ' + state.interimText : '')).trim();
+
+    if (!finalText) {
+      rawTextDisplay.innerHTML = '<span class="placeholder-text">No speech was detected. Please try speaking closer to mic.</span>';
+      polishedTextDisplay.innerHTML = '<span class="placeholder-text">Empty result.</span>';
+      capsuleLabel.textContent = 'Click Mic to Speak';
+      return;
+    }
+
+    // Call Polishing Pipeline
+    await processAndPolish(finalText, elapsedSec);
+    capsuleLabel.textContent = 'Ready (Press Space)';
+  }
+
+  function updateTimer() {
+    const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+    const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const secs = String(elapsed % 60).padStart(2, '0');
+    capsuleTimer.textContent = `${mins}:${secs}`;
+  }
+
+  function renderRawTranscript(text) {
+    if (!text) {
+      rawTextDisplay.innerHTML = '<span class="placeholder-text">Speak naturally into your microphone...</span>';
+      return;
+    }
+
+    // Highlight filler words in real-time
+    const fillerRegex = /\b(um|uh|erm|er|ah|you know|basically|actually|so yeah)\b/gi;
+    const highlighted = text.replace(fillerRegex, '<span class="filler-removed">$1</span>');
+    rawTextDisplay.innerHTML = highlighted;
+
+    const words = text.split(/\s+/).filter(Boolean).length;
+    const elapsed = ((Date.now() - state.startTime) / 1000).toFixed(1);
+    rawMeta.textContent = `${words} words · ${elapsed}s`;
+  }
+
+  // Polish Pipeline
+  async function processAndPolish(rawText, durationSec) {
+    const reqStart = Date.now();
+    polishLatencyBadge.textContent = 'Polishing...';
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.settings.groqKey) headers['x-groq-key'] = state.settings.groqKey;
+    if (state.settings.openaiKey) headers['x-openai-key'] = state.settings.openaiKey;
+
+    try {
+      const res = await fetch('/api/polish', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          rawText,
+          context: state.currentApp,
+          tone: state.currentTone,
+          dictionary: state.dictionary
+        })
+      });
+
+      const data = await res.json();
+      const latency = Date.now() - reqStart;
+      state.polishedText = data.formattedText || rawText;
+
+      polishedTextDisplay.textContent = state.polishedText;
+      polishLatencyBadge.textContent = `${latency}ms (${data.provider || 'AI'})`;
+
+      // Auto-copy to clipboard
+      if (state.settings.autoCopy) {
+        copyToClipboard(state.polishedText, false);
+      }
+
+      // Record to History
+      saveHistoryRecord({
+        asrText: rawText,
+        formattedText: state.polishedText,
+        tone: state.currentTone,
+        duration: Number(durationSec),
+        app: getAppName(state.currentApp),
+        latencyMs: latency
+      });
+
+    } catch (err) {
+      console.error('Polish error:', err);
+      state.polishedText = rawText;
+      polishedTextDisplay.textContent = rawText;
+      polishLatencyBadge.textContent = 'Local Fallback';
+    }
+  }
+
+  function getAppName(appId) {
+    const map = {
+      slack: 'Slack',
+      code: 'VS Code',
+      gmail: 'Gmail',
+      notes: 'Notes'
+    };
+    return map[appId] || 'App';
+  }
+
+  // Copy to Clipboard
+  function copyToClipboard(text, notify = true) {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      if (notify) showToast('Copied to system clipboard! 📋');
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (notify) showToast('Copied to clipboard!');
+    });
+  }
+
+  // Inject Text into Mock Sandbox App
+  function insertToSandbox(text) {
+    if (!text) text = state.polishedText || 'Hello from Talkity!';
+
+    if (state.currentApp === 'slack') {
+      const el = document.getElementById('slackInput');
+      el.value = (el.value ? el.value + ' ' : '') + text;
+      el.focus();
+    } else if (state.currentApp === 'code') {
+      const el = document.getElementById('codeInput');
+      el.value = (el.value ? el.value + '\n  ' : '') + text;
+      el.focus();
+    } else if (state.currentApp === 'gmail') {
+      const el = document.getElementById('gmailBody');
+      el.value = (el.value ? el.value + '\n' : '') + text;
+      el.focus();
+    } else if (state.currentApp === 'notes') {
+      const el = document.getElementById('notesInput');
+      el.value = (el.value ? el.value + '\n• ' : '• ') + text;
+      el.focus();
+    }
+
+    showToast(`Injected text into ${getAppName(state.currentApp)} sandbox! ⚡`);
+  }
+
+  // Inject into Real OS Active Window
+  async function injectToActiveOSApp(text) {
+    if (!text) text = state.polishedText;
+    if (!text) {
+      showToast('No transcribed text to paste');
+      return;
+    }
+
+    copyToClipboard(text, false);
+
+    try {
+      const res = await fetch('/api/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      const data = await res.json();
+      showToast('Dispatched Ctrl+V paste signal to active window! 🚀');
+    } catch {
+      showToast('Copied to clipboard! (Desktop daemon offline)');
+    }
+  }
+
+  // Dictionary Management
+  async function fetchDictionary() {
+    try {
+      const res = await fetch('/api/dictionary');
+      state.dictionary = await res.json();
+      renderDictionaryTable();
+    } catch {}
+  }
+
+  function renderDictionaryTable() {
+    dictTableBody.innerHTML = '';
+    state.dictionary.forEach((item, index) => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td><code>${item.phrase}</code></td>
+        <td><strong>${item.replacement}</strong></td>
+        <td>
+          <button class="btn-del" data-index="${index}" title="Delete rule">&times;</button>
+        </td>
+      `;
+      dictTableBody.appendChild(row);
+    });
+
+    dictTableBody.querySelectorAll('.btn-del').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const idx = e.target.getAttribute('data-index');
+        await fetch(`/api/dictionary/${idx}`, { method: 'DELETE' });
+        fetchDictionary();
+      });
+    });
+  }
+
+  // History Management
+  async function fetchHistory() {
+    try {
+      const res = await fetch('/api/history');
+      const items = await res.json();
+      renderHistoryTable(items);
+    } catch {}
+  }
+
+  async function saveHistoryRecord(record) {
+    try {
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      });
+      fetchHistory();
+    } catch {}
+  }
+
+  function renderHistoryTable(items) {
+    historyTableBody.innerHTML = '';
+    if (!items || items.length === 0) {
+      historyTableBody.innerHTML = '<tr><td colspan="7" class="text-dim" style="text-align:center;">No past dictations found.</td></tr>';
+      return;
+    }
+
+    items.forEach(item => {
+      const row = document.createElement('tr');
+      const dateStr = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      row.innerHTML = `
+        <td><small class="text-dim">${dateStr}</small></td>
+        <td><span class="badge badge-subtle">${item.app || 'Web'}</span></td>
+        <td>${item.numWords || 0}</td>
+        <td>${item.duration || 0}s</td>
+        <td><span class="badge badge-engine">${item.tone || 'clean'}</span></td>
+        <td style="max-width:320px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${item.formattedText}">
+          ${item.formattedText}
+        </td>
+        <td>
+          <button class="btn btn-xs btn-outline copy-history-btn" data-text="${encodeURIComponent(item.formattedText)}">Copy</button>
+        </td>
+      `;
+      historyTableBody.appendChild(row);
+    });
+
+    historyTableBody.querySelectorAll('.copy-history-btn').forEach(b => {
+      b.addEventListener('click', (e) => {
+        const text = decodeURIComponent(e.target.getAttribute('data-text'));
+        copyToClipboard(text);
+      });
+    });
+  }
+
+  // Toast Notification
+  function showToast(msg) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `<span>✨</span><span>${msg}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => toast.remove(), 300);
+    }, 2800);
+  }
+
+  // Event Listeners
+  function attachEventListeners() {
+    recordBtn.addEventListener('click', toggleRecording);
+    hudCapsule.addEventListener('click', toggleRecording);
+
+    // Tone Pills
+    tonePills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        tonePills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        state.currentTone = pill.getAttribute('data-tone');
+        // Repolish current text if available
+        if (state.rawText) {
+          processAndPolish(state.rawText, 0);
+        }
+      });
+    });
+
+    // App Sandbox Switcher
+    appTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        appTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        state.currentApp = tab.getAttribute('data-app');
+
+        document.querySelectorAll('.app-viewport').forEach(vp => vp.classList.remove('active'));
+        const vpId = 'viewport' + state.currentApp.charAt(0).toUpperCase() + state.currentApp.slice(1);
+        const targetVp = document.getElementById(vpId);
+        if (targetVp) targetVp.classList.add('active');
+      });
+    });
+
+    insertToSandboxBtn.addEventListener('click', () => insertToSandbox());
+    copyBtn.addEventListener('click', () => copyToClipboard(state.polishedText));
+    injectActiveAppBtn.addEventListener('click', () => injectToActiveOSApp(state.polishedText));
+
+    // Custom Dictionary Form
+    dictForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const phrase = document.getElementById('dictPhrase').value.trim();
+      const replacement = document.getElementById('dictReplacement').value.trim();
+
+      if (phrase && replacement) {
+        await fetch('/api/dictionary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phrase, replacement })
+        });
+        dictForm.reset();
+        fetchDictionary();
+        showToast(`Rule added: "${phrase}" → "${replacement}"`);
+      }
+    });
+
+    // Clear History
+    clearHistoryBtn.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to clear your local dictation history?')) {
+        await fetch('/api/history', { method: 'DELETE' });
+        fetchHistory();
+        showToast('History cleared');
+      }
+    });
+
+    // Settings Modal
+    settingsBtn.addEventListener('click', () => settingsModal.classList.add('open'));
+    closeSettingsBtn.addEventListener('click', () => settingsModal.classList.remove('open'));
+    saveSettingsBtn.addEventListener('click', saveSettings);
+    sttEngineSelect.addEventListener('change', () => {
+      groqKeyGroup.style.display = sttEngineSelect.value === 'groq' ? 'block' : 'none';
+      openaiKeyGroup.style.display = sttEngineSelect.value === 'openai' ? 'block' : 'none';
+    });
+
+    // Keyboard Shortcuts: Spacebar to toggle when not focused on an input
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+        e.preventDefault();
+        toggleRecording();
+      }
+    });
+  }
+
+  // Start app
+  document.addEventListener('DOMContentLoaded', init);
+})();

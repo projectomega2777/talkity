@@ -1,0 +1,20 @@
+{
+  "name": "talkity",
+  "version": "1.0.0",
+  "description": "Talkity - The Context-Aware AI Voice Dictation App & Web Playground",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "web": "node server.js",
+    "desktop": "python desktop/talkity_desktop.py"
+  },
+  "keywords": ["voice", "dictation", "whisper", "speech-to-text", "ai", "transcription"],
+  "author": "Talkity Team",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "ws": "^8.18.0"
+  }
+}
