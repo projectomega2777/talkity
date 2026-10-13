@@ -3,118 +3,147 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
+const IS_VERCEL = !!(process.env.VERCEL || process.env.NOW_REGION || process.env.LAMBDA_TASK_ROOT);
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Setup Data Storage (Safe for Local & Vercel Read-Only Environments)
+const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'talkity-data') : path.join(__dirname, 'data');
+
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch (e) {
+  // Silent fallback to in-memory on restricted filesystems
 }
 
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const DICTIONARY_FILE = path.join(DATA_DIR, 'dictionary.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
-// Initialize settings
-function getSettings() {
+// In-Memory Storage Fallbacks
+let inMemoryHistory = [];
+let inMemoryDictionary = [
+  { phrase: "talkity", replacement: "Talkity" },
+  { phrase: "antigravity", replacement: "Antigravity" },
+  { phrase: "pi yush", replacement: "Piyush" },
+  { phrase: "ui automation", replacement: "UI Automation" }
+];
+let inMemorySettings = {
+  groqApiKey: process.env.GROQ_API_KEY || '',
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
+  language: 'en-IN',
+  autoCopy: true,
+  soundChimes: true
+};
+
+function readJSON(file, fallback) {
   try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    if (fs.existsSync(file)) {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
     }
-  } catch {}
-  return {
-    groqApiKey: process.env.GROQ_API_KEY || '',
-    openaiApiKey: process.env.OPENAI_API_KEY || '',
-    language: 'en-IN',
-    autoCopy: true,
-    soundChimes: true
-  };
+  } catch (e) {}
+  return fallback;
 }
 
-function saveSettings(settings) {
+function writeJSON(file, data) {
   try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-  } catch {}
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  } catch (e) {
+    // If filesystem is read-only, keep in memory
+  }
 }
 
-// Initialize default files if missing
+// Initialize default files safely if writable
 if (!fs.existsSync(HISTORY_FILE)) {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
+  writeJSON(HISTORY_FILE, []);
 }
 
 if (!fs.existsSync(DICTIONARY_FILE)) {
-  fs.writeFileSync(DICTIONARY_FILE, JSON.stringify([
-    { phrase: "talkity", replacement: "Talkity" },
-    { phrase: "antigravity", replacement: "Antigravity" },
-    { phrase: "pi yush", replacement: "Piyush" },
-    { phrase: "ui automation", replacement: "UI Automation" }
-  ], null, 2));
+  writeJSON(DICTIONARY_FILE, inMemoryDictionary);
+}
+
+function getSettings() {
+  const disk = readJSON(SETTINGS_FILE, null);
+  if (disk) return disk;
+  return inMemorySettings;
+}
+
+function saveSettings(settings) {
+  inMemorySettings = { ...inMemorySettings, ...settings };
+  writeJSON(SETTINGS_FILE, inMemorySettings);
 }
 
 app.use(cors());
 
-// Raw body parser for audio uploads
+// Raw body parser for audio uploads (handles both /api/transcribe and /transcribe)
 app.use('/api/transcribe', express.raw({ type: '*/*', limit: '50mb' }));
+app.use('/transcribe', express.raw({ type: '*/*', limit: '50mb' }));
 
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
 
-// Store active desktop / client ws connections
+// Static file serving
+const publicPath = path.join(__dirname, 'public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+}
+
+// WebSocket setup (Enabled in local server mode, bypassed in serverless)
 const clients = new Set();
 let desktopClient = null;
 
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.send(JSON.stringify({ type: 'connected', message: 'Talkity WebSocket connected' }));
+if (!IS_VERCEL) {
+  try {
+    const { WebSocketServer } = require('ws');
+    const wss = new WebSocketServer({ server });
 
-  ws.on('message', (msg) => {
-    try {
-      const data = JSON.parse(msg);
-      if (data.type === 'register_desktop') {
-        desktopClient = ws;
-        console.log('💻 Desktop Daemon registered via WebSocket');
-        broadcast({ type: 'desktop_status', connected: true });
-      }
+    wss.on('connection', (ws) => {
+      clients.add(ws);
+      ws.send(JSON.stringify({ type: 'connected', message: 'Talkity WebSocket connected' }));
 
-      // Broadcast to all other clients
-      for (const client of clients) {
-        if (client !== ws && client.readyState === 1) {
-          client.send(JSON.stringify(data));
+      ws.on('message', (msg) => {
+        try {
+          const data = JSON.parse(msg);
+          if (data.type === 'register_desktop') {
+            desktopClient = ws;
+            console.log('💻 Desktop Daemon registered via WebSocket');
+            broadcast({ type: 'desktop_status', connected: true });
+          }
+
+          // Broadcast to all other clients
+          for (const client of clients) {
+            if (client !== ws && client.readyState === 1) {
+              client.send(JSON.stringify(data));
+            }
+          }
+        } catch (e) {
+          console.error('WS parse error:', e);
         }
-      }
-    } catch (e) {
-      console.error('WS parse error:', e);
-    }
-  });
+      });
 
-  ws.on('close', () => {
-    clients.delete(ws);
-    if (desktopClient === ws) {
-      desktopClient = null;
-      broadcast({ type: 'desktop_status', connected: false });
-    }
-  });
-});
+      ws.on('close', () => {
+        clients.delete(ws);
+        if (desktopClient === ws) {
+          desktopClient = null;
+          broadcast({ type: 'desktop_status', connected: false });
+        }
+      });
+    });
+  } catch (e) {
+    console.warn('WebSocket init skipped:', e.message);
+  }
+}
 
 function broadcast(event) {
   for (const client of clients) {
     if (client.readyState === 1) {
       client.send(JSON.stringify(event));
     }
-  }
-}
-
-function readJSON(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
   }
 }
 
@@ -171,37 +200,36 @@ function ruleBasedPolish(text, tone = 'clean', dictionary = []) {
   return result;
 }
 
-// GET /api/settings
-app.get('/api/settings', (req, res) => {
+// API Router — mounted at both '/api' and '/' for maximum deployment flexibility
+const api = express.Router();
+
+// GET /settings
+api.get('/settings', (req, res) => {
   res.json(getSettings());
 });
 
-// POST /api/settings
-app.post('/api/settings', (req, res) => {
+// POST /settings
+api.post('/settings', (req, res) => {
   const current = getSettings();
   const updated = { ...current, ...req.body };
   saveSettings(updated);
   res.json({ success: true, settings: updated });
 });
 
-// POST /api/transcribe (Handles raw audio uploads from Desktop App or Web App)
-app.post('/api/transcribe', async (req, res) => {
+// POST /transcribe
+api.post('/transcribe', async (req, res) => {
   const settings = getSettings();
   const groqKey = req.headers['x-groq-key'] || settings.groqApiKey || process.env.GROQ_API_KEY;
   const openaiKey = req.headers['x-openai-key'] || settings.openaiApiKey || process.env.OPENAI_API_KEY;
-  const lang = req.headers['x-language'] || settings.language || 'en';
 
   const audioBuffer = req.body;
   if (!audioBuffer || audioBuffer.length < 500) {
     return res.status(400).json({ error: 'No audio data received or recording was too short.' });
   }
 
-  console.log(`🎙️ Received audio for transcription: ${audioBuffer.length} bytes`);
-
   // 1. Groq Whisper (Ultra-low latency ~150ms, near 100% accuracy)
   if (groqKey) {
     try {
-      console.log('⚡ Calling Groq Whisper-large-v3...');
       const formData = new FormData();
       formData.append('file', new Blob([audioBuffer], { type: 'audio/wav' }), 'audio.wav');
       formData.append('model', 'whisper-large-v3');
@@ -218,9 +246,7 @@ app.post('/api/transcribe', async (req, res) => {
       if (response.ok) {
         const data = await response.json();
         const rawText = (data.text || '').trim();
-        console.log(`[🗣️ Groq ASR]: "${rawText}"`);
-
-        const dict = readJSON(DICTIONARY_FILE, []);
+        const dict = readJSON(DICTIONARY_FILE, inMemoryDictionary);
         const formatted = ruleBasedPolish(rawText, 'clean', dict);
 
         return res.json({
@@ -228,9 +254,6 @@ app.post('/api/transcribe', async (req, res) => {
           formattedText: formatted,
           provider: 'groq-whisper-large-v3'
         });
-      } else {
-        const err = await response.text();
-        console.error('Groq Whisper error:', err);
       }
     } catch (err) {
       console.error('Groq transcription error:', err.message);
@@ -240,7 +263,6 @@ app.post('/api/transcribe', async (req, res) => {
   // 2. OpenAI Whisper
   if (openaiKey) {
     try {
-      console.log('Calling OpenAI Whisper...');
       const formData = new FormData();
       formData.append('file', new Blob([audioBuffer], { type: 'audio/wav' }), 'audio.wav');
       formData.append('model', 'whisper-1');
@@ -256,7 +278,7 @@ app.post('/api/transcribe', async (req, res) => {
       if (response.ok) {
         const data = await response.json();
         const rawText = (data.text || '').trim();
-        const dict = readJSON(DICTIONARY_FILE, []);
+        const dict = readJSON(DICTIONARY_FILE, inMemoryDictionary);
         const formatted = ruleBasedPolish(rawText, 'clean', dict);
         return res.json({
           text: rawText,
@@ -269,26 +291,24 @@ app.post('/api/transcribe', async (req, res) => {
     }
   }
 
-  // If no API key is configured
   return res.status(400).json({
-    error: 'No Whisper API key configured. Please add your free Groq API key in Settings (get free key at console.groq.com) or use browser Web Speech.',
-    hint: 'Groq provides 14,400 free Whisper requests/day with zero setup.'
+    error: 'No Whisper API key configured. Use browser Web Speech or add Groq API key in Settings.',
+    hint: 'Groq provides free Whisper requests with instant setup at console.groq.com'
   });
 });
 
-// POST /api/polish
-app.post('/api/polish', async (req, res) => {
+// POST /polish
+api.post('/polish', async (req, res) => {
   const { rawText, context = '', tone = 'clean', dictionary = [] } = req.body;
   const settings = getSettings();
   const apiKey = req.headers['x-groq-key'] || settings.groqApiKey || process.env.GROQ_API_KEY || req.headers['x-openai-key'] || settings.openaiApiKey || process.env.OPENAI_API_KEY;
 
-  const userDictionary = dictionary.length ? dictionary : readJSON(DICTIONARY_FILE, []);
+  const userDictionary = dictionary.length ? dictionary : readJSON(DICTIONARY_FILE, inMemoryDictionary);
 
   if (!rawText) {
     return res.status(400).json({ error: 'rawText is required' });
   }
 
-  // If API key is available, call Groq/OpenAI for LLM polishing
   if (apiKey) {
     try {
       const isGroq = !!(req.headers['x-groq-key'] || settings.groqApiKey || process.env.GROQ_API_KEY);
@@ -337,20 +357,19 @@ Output ONLY the final polished text. Do not provide greetings, explanations, or 
     }
   }
 
-  // Offline / Fallback rule-based engine
   const polished = ruleBasedPolish(rawText, tone, userDictionary);
   res.json({ formattedText: polished, provider: 'local-rules-engine' });
 });
 
-// GET /api/history
-app.get('/api/history', (req, res) => {
-  const history = readJSON(HISTORY_FILE, []);
+// GET /history
+api.get('/history', (req, res) => {
+  const history = readJSON(HISTORY_FILE, inMemoryHistory);
   res.json(history);
 });
 
-// POST /api/history
-app.post('/api/history', (req, res) => {
-  const history = readJSON(HISTORY_FILE, []);
+// POST /history
+api.post('/history', (req, res) => {
+  const history = readJSON(HISTORY_FILE, inMemoryHistory);
   const newEntry = {
     id: 'item-' + Date.now(),
     timestamp: Date.now(),
@@ -364,49 +383,53 @@ app.post('/api/history', (req, res) => {
   };
   history.unshift(newEntry);
   if (history.length > 100) history.pop();
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  inMemoryHistory = history;
+  writeJSON(HISTORY_FILE, history);
   broadcast({ type: 'history_update', entry: newEntry });
   res.json(newEntry);
 });
 
-// DELETE /api/history
-app.delete('/api/history', (req, res) => {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
+// DELETE /history
+api.delete('/history', (req, res) => {
+  inMemoryHistory = [];
+  writeJSON(HISTORY_FILE, []);
   broadcast({ type: 'history_cleared' });
-  res.json({ success: true });
+  res.json({ success: true, message: 'History cleared' });
 });
 
-// GET /api/dictionary
-app.get('/api/dictionary', (req, res) => {
-  const dict = readJSON(DICTIONARY_FILE, []);
+// GET /dictionary
+api.get('/dictionary', (req, res) => {
+  const dict = readJSON(DICTIONARY_FILE, inMemoryDictionary);
   res.json(dict);
 });
 
-// POST /api/dictionary
-app.post('/api/dictionary', (req, res) => {
+// POST /dictionary
+api.post('/dictionary', (req, res) => {
   const { phrase, replacement } = req.body;
   if (!phrase || !replacement) {
     return res.status(400).json({ error: 'Phrase and replacement are required' });
   }
-  const dict = readJSON(DICTIONARY_FILE, []);
+  const dict = readJSON(DICTIONARY_FILE, inMemoryDictionary);
   dict.push({ phrase, replacement });
-  fs.writeFileSync(DICTIONARY_FILE, JSON.stringify(dict, null, 2));
+  inMemoryDictionary = dict;
+  writeJSON(DICTIONARY_FILE, dict);
   res.json({ success: true, dictionary: dict });
 });
 
-// DELETE /api/dictionary/:index
-app.delete('/api/dictionary/:index', (req, res) => {
+// DELETE /dictionary/:index
+api.delete('/dictionary/:index', (req, res) => {
   const idx = parseInt(req.params.index, 10);
-  const dict = readJSON(DICTIONARY_FILE, []);
+  const dict = readJSON(DICTIONARY_FILE, inMemoryDictionary);
   if (idx >= 0 && idx < dict.length) {
     dict.splice(idx, 1);
-    fs.writeFileSync(DICTIONARY_FILE, JSON.stringify(dict, null, 2));
+    inMemoryDictionary = dict;
+    writeJSON(DICTIONARY_FILE, dict);
   }
   res.json({ success: true, dictionary: dict });
 });
 
-// POST /api/inject
-app.post('/api/inject', (req, res) => {
+// POST /inject
+api.post('/inject', (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'text is required' });
 
@@ -414,9 +437,31 @@ app.post('/api/inject', (req, res) => {
   res.json({ success: true, message: 'Injection dispatched to desktop daemon' });
 });
 
-server.listen(PORT, () => {
-  console.log(`\n======================================================`);
-  console.log(`🚀 Talkity Web Server running at: http://localhost:${PORT}`);
-  console.log(`🎙️ WebSocket ready for live audio & desktop injection`);
-  console.log(`======================================================\n`);
+// Mount router on both /api and root
+app.use('/api', api);
+app.use(api);
+
+// Fallback: Serve index.html for root or non-API routes
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: 'API route not found' });
+  }
+  const indexPath = path.join(publicPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.send('Talkity API is running.');
+  }
 });
+
+// Start listening only in standalone local mode (not in Vercel Serverless)
+if (!IS_VERCEL && require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`\n======================================================`);
+    console.log(`🚀 Talkity Web Server running at: http://localhost:${PORT}`);
+    console.log(`🎙️ WebSocket ready for live audio & desktop injection`);
+    console.log(`======================================================\n`);
+  });
+}
+
+module.exports = app;

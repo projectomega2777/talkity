@@ -172,7 +172,9 @@
       state.ws.onclose = () => {
         daemonStatus.querySelector('.status-dot').style.background = '#f59e0b';
         daemonStatus.querySelector('.status-label').textContent = 'Web Engine Ready';
-        setTimeout(initWebSocket, 4000);
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+          setTimeout(initWebSocket, 4000);
+        }
       };
     } catch {
       daemonStatus.querySelector('.status-label').textContent = 'Web Engine Ready';
