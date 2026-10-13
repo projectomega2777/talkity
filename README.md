@@ -1,159 +1,139 @@
-<<<<<<< HEAD
 # 🎙️ Talkity — Voice-to-Text Dictation Platform
 
-**Talkity** is a real-time voice dictation web application that converts your speech into polished, editable text — right in your browser. No sign-up required, no API keys needed for basic use.
+> **Speak naturally. Talkity listens, transcribes, and polishes your words in real time with zero limits.**
 
-> Speak naturally. Talkity listens, transcribes, and polishes your words instantly.
+Talkity is a modern, real-time voice dictation platform and companion Windows desktop application. It captures acoustic audio, transcribes it with high precision across accents (including Indian English and Hindi), polishes grammar and formatting, and seamlessly injects output into your favorite apps.
 
 ---
 
 ## ✨ Features
 
-- 🎤 **Real-Time Speech Recognition** — Uses the Web Speech API for instant, accurate transcription directly in your browser
-- 🌐 **Multi-Language Support** — English (India), English (US), English (UK), Hindi, and more
-- ✍️ **AI Text Polishing** — Cleans up grammar, punctuation, and formatting automatically
-- 📋 **One-Click Copy** — Copy raw or polished text to clipboard instantly
-- 📜 **Dictation History** — All your past transcriptions saved and searchable
-- 📖 **Custom Dictionary** — Add your own words, jargon, or names for better accuracy
-- ⚙️ **Configurable Settings** — Choose speech engine, language, and polish level
-- 🖥️ **Desktop App** — Optional Windows overlay app (HUD pill) with global hotkey support
-- 🌙 **Dark Mode UI** — Clean, modern interface that's easy on the eyes
-- 📱 **Responsive Design** — Works on desktop, tablet, and mobile browsers
+- 🎤 **Real-Time Speech Recognition** — Instantaneous client-side and cloud transcription powered by Web Speech API and Groq/OpenAI Whisper.
+- 🔄 **Fresh Page on Refresh** — Every time the website refreshes, past session history is automatically cleared and resets into a clean, distraction-free playground.
+- 🌐 **Multi-Language & Accent Optimized** — Native support for English (India), English (US), English (UK), and Hindi / Hinglish.
+- ✍️ **Intelligent AI Text Polish** — Automatically eliminates vocal fillers (*um*, *uh*, *you know*), cleans punctuation, and normalizes casing.
+- 🎨 **Multi-Tone Adaptation** — Switch between Clean Natural, Punchy Concise, Executive Professional, AI Prompt Engineer, and Developer Code comments.
+- 🧪 **Interactive App Sandboxes** — Test real-time dictation directly into simulated Slack, VS Code, Gmail, and Document note editors.
+- 📖 **Custom Vocabulary & Dictionary** — Define personal phrases, jargon, and shorthand with automated auto-correction replacements.
+- 📋 **Zero-Friction Clipboard** — Auto-copy to clipboard and simulated active window paste (`Ctrl+V`).
+- 🖥️ **Windows Desktop Companion HUD** — Floating pill overlay (`Talkity.exe`) with global hotkey (`F8`) dictation.
+- 🌙 **Dark-Mode Modern UI** — Sleek responsive interface with real-time audio spectrum visualization.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- **[Node.js](https://nodejs.org/)** v16 or higher
-- **Google Chrome** (recommended for best speech recognition support)
+- **[Node.js](https://nodejs.org/)** (v16 or higher)
+- **Google Chrome** or Microsoft Edge (recommended for Web Speech API)
 
-### Installation
+### 1. Clone the Repository
 
 ```bash
-# 1. Clone this repository
-git clone https://github.com/projectomega2777/talkity.git
-
-# 2. Navigate to the project folder
+git clone git@github.com:projectomega2777/talkity.git
 cd talkity
+```
 
-# 3. Install dependencies (already included, but just in case)
+### 2. Install Dependencies
+
+```bash
 npm install
+```
 
-# 4. Start the server
+### 3. Launch the Server
+
+```bash
 node server.js
 ```
 
-### Usage
-
-1. Open your browser and go to **[http://localhost:3000](http://localhost:3000)**
-2. Select your preferred language from the dropdown
-3. Click the **🎤 Start Recording** button
-4. Speak naturally — your words appear in real-time
-5. Click **Stop** to finalize the transcription
-6. Use **Polish** to clean up grammar and formatting
-7. Click **Copy** to paste anywhere
+The server will be accessible at:
+👉 **[http://localhost:3000](http://localhost:3000)**
 
 ---
 
-## 🏗️ Project Structure
+## 🎯 How to Use
+
+1. Navigate to `http://localhost:3000` in Google Chrome.
+2. Select your language from the control bar dropdown (e.g., **English (India)** or **English (US)**).
+3. Click **Start Dictating** or tap the <kbd>Space</kbd> bar.
+4. Speak naturally into your microphone.
+5. Hit **Finish Dictating** to polish and automatically copy the output to your clipboard!
+6. Want a fresh start? Simply **refresh the page** (F5 / Ctrl+R) — history is automatically cleared and all inputs reset to fresh.
+
+---
+
+## 🖥️ Windows Desktop HUD App (`Talkity.exe`)
+
+Talkity comes with a dedicated Windows desktop companion app located in `desktop/` and directly downloadable from the website (`/downloads/Talkity.exe`).
+
+### Desktop App Features
+- **Global Hotkey:** Press <kbd>F8</kbd> anywhere in Windows to start recording; press <kbd>F8</kbd> again to finish.
+- **HUD Pill:** Floating always-on-top status pill displays current recording state.
+- **Auto-Paste:** Automatically restores your clipboard and types the polished transcript into whatever app currently has focus.
+
+To compile or run the desktop app:
+```powershell
+# Compile C# source using the built-in .NET compiler:
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:Talkity.exe desktop/TalkityApp.cs
+```
+
+---
+
+## 📁 Repository Structure
 
 ```
 talkity/
 ├── server.js              # Express + WebSocket backend server
-├── package.json           # Node.js project configuration
+├── package.json           # Node.js dependencies and scripts
+├── desktop/
+│   ├── TalkityApp.cs      # C# source code for Windows HUD overlay
+│   └── talkity_desktop.py # Python alternative desktop client
 ├── public/
-│   ├── index.html         # Main web interface
-│   ├── app.js             # Frontend JavaScript (speech recognition, UI logic)
-│   ├── styles.css         # Dark-mode responsive styling
+│   ├── index.html         # Web application UI
+│   ├── app.js             # Client speech engine & UI controller
+│   ├── styles.css         # Dark theme styling & audio visualizer
 │   └── downloads/
-│       └── Talkity.exe    # Windows desktop app download
+│       └── Talkity.exe    # Precompiled Windows executable
 ├── data/
-│   ├── history.json       # Saved dictation history
-│   └── dictionary.json    # Custom dictionary entries
-└── README.md              # This file
+│   ├── dictionary.json    # Custom vocabulary replacement rules
+│   └── history.json       # Local dictation history
+└── README.md              # Project documentation
 ```
 
 ---
 
-## 🔌 API Endpoints
+## 🔌 REST & WebSocket API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/transcribe` | Upload audio file for transcription |
-| `POST` | `/api/polish` | Polish raw text with AI |
-| `GET`  | `/api/history` | Retrieve dictation history |
-| `POST` | `/api/history` | Save a new dictation entry |
-| `GET`  | `/api/dictionary` | Get custom dictionary words |
-| `POST` | `/api/dictionary` | Add a word to the dictionary |
-| `GET`  | `/api/settings` | Get app settings |
-| `POST` | `/api/settings` | Update app settings |
-
----
-
-## 🖥️ Desktop App (Windows)
-
-Talkity includes an optional Windows desktop companion app:
-
-- **Global Hotkey** (F8) — Press to start/stop recording from any app
-- **HUD Overlay** — Small floating pill shows recording status
-- **Auto-Paste** — Transcribed text is automatically pasted into your active window
-
-Download `Talkity.exe` from the website or find it in the `public/downloads/` folder.
-
-> **Note:** The desktop app requires the web server to be running (`node server.js`).
+| `POST` | `/api/transcribe` | Upload WAV audio buffer for Whisper transcription |
+| `POST` | `/api/polish` | Transform raw text with selected tone & custom vocabulary |
+| `GET`  | `/api/history` | Retrieve saved transcriptions |
+| `POST` | `/api/history` | Store transcription record |
+| `DELETE`| `/api/history` | Clear all past session transcriptions |
+| `GET`  | `/api/dictionary` | List custom replacement dictionary |
+| `POST` | `/api/dictionary` | Add new phrase replacement rule |
+| `DELETE`| `/api/dictionary/:id` | Remove a rule from dictionary |
+| `WS`   | `ws://localhost:3000` | Real-time bridge between Web UI and Desktop HUD |
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Backend | Node.js, Express.js |
-| Real-time | WebSocket (ws) |
-| Frontend | Vanilla JavaScript, HTML5, CSS3 |
-| Speech | Web Speech API (browser), Whisper (optional) |
-| Desktop | C# (.NET Framework 4.0) |
-
----
-
-## 📋 Requirements
-
-- **OS:** Windows 10/11 (for desktop app), any OS (for web)
-- **Browser:** Google Chrome (recommended), Edge, Firefox
-- **Node.js:** v16+
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- **Backend:** Node.js, Express, WebSocket (`ws`), dotenv
+- **Frontend:** Vanilla JavaScript (ES6+), Web Audio API, Web Speech API, HTML5 Canvas
+- **Desktop:** C# (.NET Framework 4.0 Win32 APIs: `SetWindowsHookEx`, `SendInput`, `mciSendString`)
+- **ASR & AI:** Web Speech API, Groq Cloud Whisper, OpenAI Whisper
 
 ---
 
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE).
 
 ---
 
-## 👨‍💻 Author
+## 👤 Author
 
-**projectomega2777**
-
----
-
-<p align="center">
-  Made with ❤️ and 🎤
-</p>
-=======
-# talkity
-A clone website of whispr flow , with no limits  free to use
->>>>>>> fd8e7eefb2906fe40ad45f2b6baadaa8ac4b6835
+Developed by **[projectomega2777](https://github.com/projectomega2777)**

@@ -372,6 +372,7 @@ app.post('/api/history', (req, res) => {
 // DELETE /api/history
 app.delete('/api/history', (req, res) => {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
+  broadcast({ type: 'history_cleared' });
   res.json({ success: true });
 });
 

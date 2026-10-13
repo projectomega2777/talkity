@@ -69,12 +69,12 @@
   const capsuleCtx = capsuleWaveform.getContext('2d');
 
   // Initialize
-  function init() {
+  async function init() {
     loadSettings();
     initWebSocket();
     initSpeechRecognition();
     fetchDictionary();
-    fetchHistory();
+    await clearHistoryAndResetPage();
     attachEventListeners();
     setupCanvasAnimation();
   }
@@ -163,6 +163,8 @@
             toggleRecording();
           } else if (data.type === 'history_update') {
             fetchHistory();
+          } else if (data.type === 'history_cleared') {
+            renderHistoryTable([]);
           }
         } catch {}
       };
@@ -185,10 +187,11 @@
       return;
     }
 
+    const langSelect = document.getElementById('langSelect');
     state.recognition = new SpeechRec();
     state.recognition.continuous = true;
     state.recognition.interimResults = true;
-    state.recognition.lang = 'en-US';
+    state.recognition.lang = langSelect ? langSelect.value : 'en-IN';
 
     state.recognition.onstart = () => {
       state.interimText = '';
@@ -339,6 +342,8 @@
     // Start microphone & recognition
     await startAudioCapture();
     if (state.recognition) {
+      const langSelect = document.getElementById('langSelect');
+      if (langSelect) state.recognition.lang = langSelect.value;
       try { state.recognition.start(); } catch {}
     }
 
@@ -363,6 +368,9 @@
       try { state.recognition.stop(); } catch {}
     }
     stopAudioCapture();
+
+    // Small delay to allow Chrome to flush the final speech result
+    await new Promise(resolve => setTimeout(resolve, 250));
 
     const finalText = (state.rawText + (state.interimText ? ' ' + state.interimText : '')).trim();
 
@@ -559,7 +567,58 @@
     });
   }
 
-  // History Management
+  // History Management & Page Reset
+  async function clearHistoryAndResetPage() {
+    try {
+      await fetch('/api/history', { method: 'DELETE' });
+    } catch (e) {
+      console.warn('History clear error on load:', e);
+    }
+    renderHistoryTable([]);
+
+    // Reset internal state
+    state.rawText = '';
+    state.interimText = '';
+    state.polishedText = '';
+
+    // Reset UI Displays
+    if (rawTextDisplay) {
+      rawTextDisplay.innerHTML = '<span class="placeholder-text">Speak naturally into your microphone. Your unedited acoustic stream will render here...</span>';
+    }
+    if (polishedTextDisplay) {
+      polishedTextDisplay.innerHTML = '<span class="placeholder-text">Polished, punctuated text with filler words removed will appear here ready to insert...</span>';
+    }
+    if (rawMeta) {
+      rawMeta.textContent = '0 words · 0.0s';
+    }
+    if (polishLatencyBadge) {
+      polishLatencyBadge.textContent = 'Ready';
+      polishLatencyBadge.className = 'badge badge-success';
+    }
+
+    // Reset Sandbox Inputs to clean empty state
+    const sandboxFields = ['slackInput', 'codeInput', 'gmailBody', 'notesInput'];
+    sandboxFields.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+
+    // Reset Tone Pills to clean default
+    tonePills.forEach(p => {
+      if (p.getAttribute('data-tone') === 'clean') {
+        p.classList.add('active');
+      } else {
+        p.classList.remove('active');
+      }
+    });
+    state.currentTone = 'clean';
+
+    // Reset HUD Capsule & Button
+    if (capsuleLabel) capsuleLabel.textContent = 'Click Mic to Speak';
+    if (capsuleTimer) capsuleTimer.textContent = '00:00';
+    if (recordBtnText) recordBtnText.textContent = 'Start Dictating';
+  }
+
   async function fetchHistory() {
     try {
       const res = await fetch('/api/history');
@@ -682,13 +741,21 @@
       }
     });
 
-    // Clear History
+    // Language selector change listener
+    const langSelect = document.getElementById('langSelect');
+    if (langSelect) {
+      langSelect.addEventListener('change', () => {
+        if (state.recognition) {
+          state.recognition.lang = langSelect.value;
+        }
+        showToast(`Language set to ${langSelect.options[langSelect.selectedIndex].text}`);
+      });
+    }
+
+    // Clear History & Reset Page
     clearHistoryBtn.addEventListener('click', async () => {
-      if (confirm('Are you sure you want to clear your local dictation history?')) {
-        await fetch('/api/history', { method: 'DELETE' });
-        fetchHistory();
-        showToast('History cleared');
-      }
+      await clearHistoryAndResetPage();
+      showToast('History cleared & fresh page started! ✨');
     });
 
     // Settings Modal
