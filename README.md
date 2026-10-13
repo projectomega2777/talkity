@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🎙️ Talkity — Voice-to-Text Dictation Platform
 
 **Talkity** is a real-time voice dictation web application that converts your speech into polished, editable text — right in your browser. No sign-up required, no API keys needed for basic use.
@@ -152,3 +153,7 @@ This project is open source and available under the [MIT License](LICENSE).
 <p align="center">
   Made with ❤️ and 🎤
 </p>
+=======
+# talkity
+A clone website of whispr flow , with no limits  free to use
+>>>>>>> fd8e7eefb2906fe40ad45f2b6baadaa8ac4b6835
